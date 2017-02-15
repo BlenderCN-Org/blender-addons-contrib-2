@@ -17,11 +17,11 @@
 # ##### END GPL LICENSE BLOCK #####
 
 bl_info = {
-    "name": "Export Paper Model",
+    "name": "Export Paper Model - Modified",
     "author": "Addam Dominec",
-    "version": (0, 9),
+    "version": (0, 9, 1),
     "blender": (2, 70, 0),
-    "location": "File > Export > Paper Model",
+    "location": "File > Export > Paper Model Modified",
     "warning": "",
     "description": "Export printable net of the active mesh",
     "category": "Import-Export",
@@ -58,7 +58,8 @@ import bgl
 import mathutils as M
 from re import compile as re_compile
 from itertools import chain, repeat
-from math import pi
+from math import pi, sqrt
+from datetime import datetime
 
 try:
     import os.path as os_path
@@ -76,6 +77,12 @@ default_priority_effect = {
     'LENGTH': -0.05
 }
 
+
+import logging
+logging.basicConfig(level=logging.DEBUG,format='(%(threadName)-10s) %(message)s',)
+log = logging.getLogger('MYSCHTUFF')
+
+log.error("My message in a Linux console")
 
 def first_letters(text):
     """Iterator over the first letter of each word"""
@@ -383,6 +390,8 @@ class Mesh:
             uvedge.sticker = Sticker(uvedge, default_width, index, target_island)
             uvedge.island.add_marker(uvedge.sticker)
 
+        sticker_numbering = 0
+        print('using modified version from {}'.format(datetime.now()))
         for edge in self.edges.values():
             if edge.is_main_cut and len(edge.uvedges) >= 2 and edge.vect.length_squared > 0:
                 uvedge_a, uvedge_b = edge.uvedges[:2]
@@ -396,8 +405,8 @@ class Mesh:
                                 uvedge not in (uvedge_a.neighbor_left, uvedge_a.neighbor_right)):
                             # it will not be clear to see that these uvedges should be sticked together
                             # So, create an arrow and put the index on all stickers
-                            target_island.sticker_numbering += 1
-                            index = str(target_island.sticker_numbering)
+                            sticker_numbering += 1
+                            index = str(sticker_numbering)
                             if is_upsidedown_wrong(index):
                                 index += "."
                             target_island.add_marker(Arrow(uvedge_a, default_width, index))
@@ -751,8 +760,7 @@ class Island:
         'pos', 'bounding_box',
         'image_path', 'embedded_image',
         'number', 'label', 'abbreviation', 'title',
-        'has_safe_geometry', 'is_inside_out',
-        'sticker_numbering')
+        'has_safe_geometry', 'is_inside_out')
 
     def __init__(self, face=None):
         """Create an Island from a single Face"""
@@ -769,7 +777,6 @@ class Island:
         self.embedded_image = None
         self.is_inside_out = False  # swaps concave <-> convex edges
         self.has_safe_geometry = True
-        self.sticker_numbering = 0
 
         if face:
             uvface = UVFace(face, self)
@@ -1161,8 +1168,11 @@ class UVEdge:
     def is_uvface_upwards(self):
         return (self.va.tup < self.vb.tup) ^ self.uvface.flipped
 
+    def length(self):
+        return sqrt((self.va.co.y - self.vb.co.y)**2 + (self.va.co.x - self.vb.co.x)**2)
+
     def __repr__(self):
-        return "({0.va} - {0.vb})".format(self)
+        return "({0.va} - {0.vb}) : {1}".format(self, self.length())
 
 
 class PhantomUVEdge:
@@ -1217,7 +1227,7 @@ class UVFace:
 
 class Arrow:
     """Mark in the document: an arrow denoting the number of the edge it points to"""
-    __slots__ = ('bounds', 'center', 'rot', 'text', 'size')
+    __slots__ = ('bounds', 'center', 'normal', 'rot', 'text', 'size')
 
     def __init__(self, uvedge, size, index):
         self.text = str(index)
@@ -1225,10 +1235,11 @@ class Arrow:
         self.center = (uvedge.va.co + uvedge.vb.co) / 2
         self.size = size
         sin, cos = edge.y / edge.length, edge.x / edge.length
-        self.rot = M.Matrix(((cos, -sin), (sin, cos)))
+        # self.rot = M.Matrix(((cos, -sin), (sin, cos)))
+        self.rot = M.Matrix(((-cos, sin), (-sin, -cos)))
         tangent = edge.normalized()
-        normal = M.Vector((tangent.y, -tangent.x))
-        self.bounds = [self.center, self.center + (1.2*normal + tangent)*size, self.center + (1.2*normal - tangent)*size]
+        self.normal = M.Vector((tangent.y, -tangent.x))
+        self.bounds = [self.center, self.center + (1.2*self.normal + tangent)*size, self.center + (1.2*self.normal - tangent)*size]
 
 
 class Sticker:
@@ -1680,10 +1691,43 @@ class PDF:
                     resources["XObject"][identifier] = island.embedded_image
 
                 if island.title:
+                    textwidth = self.text_width(island.title)
+                    textbox_y = 500 * island.bounding_box.y
+                    textbox_x = 500 * (island.bounding_box.x - textwidth)
+                    # if 'Island 2' in str(island.title):
+                    #   print('=====================')
+                    #   print(island.title)
+                    #   print(island.bounding_box)
+                    #   for face in island.faces:
+                    #       print('------------------')
+                    #       print(face)
+                    #       print(face.verts)
+                    #       print(face.edges)
+                    #       for edge in face.edges:
+                    #           if edge.length() >= textwidth:
+                    #               # find edge rotation
+                    #               # find edge normal (let's say it faces inwards)
+                    #               # find edge center
+                    #               # place text at (center + normal * text_height)
+                    #               # rotate text by normal
+                    #               center = (edge.va.co + edge.vb.co) / 2
+                    #               sin, cos = edge.y / edge.length, edge.x / edge.length
+                    #               rot = M.Matrix(((-cos, sin), (-sin, -cos)))
+                    #               tangent = edge.normalized()
+                    #               normal = M.Vector((tangent.y, -tangent.x))
+                    #               center = center + 0.5 * normal
+                    #               bounds = [center, center + (1.2*normal + tangent)*size, center + (1.2*normal - tangent)*size]
+                    #
+                    #       print('------------------')
+                    #   print('tw: {tw}\nx: {x}\ny: {y}'.format(
+                    #     tw=textwidth, x=textbox_x, y=textbox_y
+                    #   ))
+                    #   print('=====================')
                     commands.append("/Gtext gs BT {x:.6f} {y:.6f} Td ({label}) Tj ET".format(
                         size=1000*self.text_size,
-                        x=500 * (island.bounding_box.x - self.text_width(island.title)),
-                        y=1000 * 0.2 * self.text_size,
+                        x=textbox_x,
+                        y=textbox_y,
+                        # y=1000 * 0.2 * self.text_size,
                         label=island.title))
 
                 data_markers, data_stickerfill, data_outer, data_convex, data_concave, data_freestyle = (list() for i in range(6))
@@ -1700,6 +1744,7 @@ class PDF:
                     elif isinstance(marker, Arrow):
                         size = 1000 * marker.size
                         position = 1000 * (marker.center + marker.rot*marker.size*M.Vector((0, -0.9)))
+                        # TODO: rotate font with arrow
                         data_markers.append("q BT {pos.x:.6f} {pos.y:.6f} Td /F1 {size:.6f} Tf ({index}) Tj ET {mat[0][0]:.6f} {mat[1][0]:.6f} {mat[0][1]:.6f} {mat[1][1]:.6f} {arrow_pos.x:.6f} {arrow_pos.y:.6f} cm 0 0 m 1 -1 l 0 -0.25 l -1 -1 l f Q".format(
                             index=marker.text,
                             arrow_pos=1000 * marker.center,
@@ -2100,7 +2145,7 @@ class ExportPaperModel(bpy.types.Operator):
         self.unfolder.prepare(cage_size, create_uvmap=self.do_create_uvmap, scale=sce.unit_settings.scale_length/self.scale)
         scale_ratio = self.get_scale_ratio(sce)
         if scale_ratio > 1:
-            self.scale *= scale_ratio
+            self.scale *= scale_ratio * 1.05
         wm = context.window_manager
         wm.fileselect_add(self)
 
@@ -2438,4 +2483,6 @@ def unregister():
         display_islands.handle = None
 
 if __name__ == "__main__":
+    print('registering...')
     register()
+    print('DONE')
